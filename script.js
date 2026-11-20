@@ -3,8 +3,7 @@
    1. Préférences d'accessibilité (contraste, taille, animations)
    2. Navigation : page courante
    3. Programmation : filtres par créneau + fiches techniques
-   4. Billetterie : choix du tarif
-   5. Billetterie : validation du formulaire de pré-réservation
+   4. Billetterie : quantités par tarif et validation de la pré-réservation
    ========================================================================== */
 (function () {
   "use strict";
@@ -136,25 +135,130 @@
   }
 
   /* ---------------------------------------------------------------------
-     4. Billetterie : choix du tarif
+     4. Billetterie : sélectionner une quantité pour chaque tarif
      ------------------------------------------------------------------ */
-  var choixTarif = document.querySelectorAll("[data-tariff]");
-  var champFormule = document.getElementById("formula");
+  var tarifs = [
+    { id: "reduit", nom: "Tarif Réduit", prix: 10 },
+    { id: "standard", nom: "Pass Soirée Standard", prix: 15 },
+    { id: "jetons", nom: "Pass + Pack Jetons", prix: 22 }
+  ];
+  var cartesTarif = document.querySelectorAll("[data-tariff]");
+  var formulaireReservation = document.getElementById("resa-form");
+  var quantites = {};
+  var tarifTotal = 0;
+  var totalPlaces = 0;
+  var resumeCommande = null;
+  var erreurQuantites = null;
 
-  for (var t = 0; t < choixTarif.length; t++) {
-    choixTarif[t].addEventListener("click", function (evenement) {
-      var id = evenement.currentTarget.getAttribute("data-tariff");
-      for (var c = 0; c < choixTarif.length; c++) {
-        choixTarif[c].setAttribute("aria-pressed", String(choixTarif[c].getAttribute("data-tariff") === id));
+  if (formulaireReservation && cartesTarif.length) {
+    var champPlaces = formulaireReservation.elements.places;
+    var ligneAncienneFormule = document.querySelector("#formula");
+    var blocAncienneFormule = ligneAncienneFormule && ligneAncienneFormule.closest(".field-row");
+    if (blocAncienneFormule) blocAncienneFormule.hidden = true;
+
+    resumeCommande = document.createElement("div");
+    resumeCommande.className = "fiche ticket-summary";
+    resumeCommande.setAttribute("aria-live", "polite");
+    resumeCommande.setAttribute("aria-atomic", "true");
+    resumeCommande.textContent = "Votre commande : sélectionnez une quantité pour chaque tarif. Maximum 10 places.";
+    formulaireReservation.insertBefore(resumeCommande, formulaireReservation.querySelector(".pmr-check"));
+
+    erreurQuantites = document.createElement("p");
+    erreurQuantites.className = "error";
+    erreurQuantites.id = "quantites-erreur";
+    erreurQuantites.setAttribute("role", "alert");
+    erreurQuantites.hidden = true;
+    resumeCommande.insertAdjacentElement("afterend", erreurQuantites);
+
+    /* Le champ précédent était à l'intérieur du bloc masqué : déplacer son erreur. */
+    var erreurPlaces = document.getElementById("places-erreur");
+    if (erreurPlaces) erreurPlaces.insertAdjacentElement("afterend", document.createElement("span"));
+    if (erreurPlaces && erreurPlaces.nextElementSibling) erreurPlaces.nextElementSibling.remove();
+    if (erreurPlaces) erreurPlaces.remove();
+
+    function afficherCommande() {
+      var descriptions = [];
+      totalPlaces = 0;
+      tarifTotal = 0;
+
+      for (var q = 0; q < tarifs.length; q++) {
+        var tarif = tarifs[q];
+        var quantite = quantites[tarif.id] ? Number(quantites[tarif.id].value) : 0;
+        totalPlaces += quantite;
+        tarifTotal += quantite * tarif.prix;
+        if (quantite > 0) {
+          descriptions.push(quantite + " × " + tarif.nom + " (" + (quantite * tarif.prix) + " €)");
+        }
       }
-      if (champFormule) champFormule.value = id;
-      var formulaire = document.getElementById("reservation");
-      if (formulaire) formulaire.scrollIntoView({ behavior: "smooth", block: "start" });
-    });
+
+      if (champPlaces) champPlaces.value = String(totalPlaces);
+      resumeCommande.textContent = descriptions.length
+        ? "Votre commande : " + descriptions.join(" · ") + " — " + totalPlaces +
+          " place(s), total : " + tarifTotal + " €."
+        : "Votre commande : sélectionnez une quantité pour chaque tarif. Maximum 10 places.";
+    }
+
+    function actualiserMaximums() {
+      var total = 0;
+      for (var q = 0; q < tarifs.length; q++) {
+        total += Number(quantites[tarifs[q].id].value) || 0;
+      }
+      for (var m = 0; m < tarifs.length; m++) {
+        var input = quantites[tarifs[m].id];
+        var autres = total - (Number(input.value) || 0);
+        input.max = String(Math.max(0, 10 - autres));
+      }
+    }
+
+    for (var t = 0; t < tarifs.length; t++) {
+      (function (tarif) {
+        var bouton = document.querySelector('[data-tariff="' + tarif.id + '"]');
+        if (!bouton) return;
+
+        var champ = document.createElement("div");
+        champ.className = "field tariff-quantity";
+        var label = document.createElement("label");
+        var idChamp = "quantite-" + tarif.id;
+        label.setAttribute("for", idChamp);
+        label.textContent = "Quantité — " + tarif.nom + " (" + tarif.prix + " €)";
+
+        var input = document.createElement("input");
+        input.type = "number";
+        input.id = idChamp;
+        input.name = idChamp;
+        input.min = "0";
+        input.max = "10";
+        input.step = "1";
+        input.value = "0";
+        input.setAttribute("inputmode", "numeric");
+        input.setAttribute("aria-describedby", "quantites-erreur");
+        quantites[tarif.id] = input;
+
+        champ.appendChild(label);
+        champ.appendChild(input);
+        bouton.replaceWith(champ);
+
+        input.addEventListener("input", function () {
+          var valeur = Number(input.value);
+          if (!Number.isFinite(valeur) || valeur < 0) valeur = 0;
+          valeur = Math.floor(valeur);
+          var maximum = Number(input.max);
+          if (valeur > maximum) valeur = maximum;
+          input.value = String(valeur);
+          actualiserMaximums();
+          afficherCommande();
+          if (erreurQuantites) {
+            erreurQuantites.hidden = true;
+            erreurQuantites.textContent = "";
+          }
+        });
+      })(tarifs[t]);
+    }
+    afficherCommande();
   }
 
   /* ---------------------------------------------------------------------
-     5. Billetterie : validation du formulaire (simulation, sans paiement)
+     5. Billetterie : validation de la pré-réservation (simulation, sans paiement)
      ------------------------------------------------------------------ */
   var formulaire = document.getElementById("resa-form");
   if (formulaire) {
@@ -164,20 +268,17 @@
       var nom = formulaire.elements.nom.value.trim();
       var email = formulaire.elements.email.value.trim();
       var places = Number(formulaire.elements.places.value);
-
       var erreurs = {};
 
-      if (nom === "") {
-        erreurs.nom = "Veuillez saisir votre nom et prénom.";
-      }
-      if (!/^\S+@\S+\.\S+$/.test(email)) {
-        erreurs.email = "Format attendu : nom@domaine.fr";
-      }
+      if (nom === "") erreurs.nom = "Veuillez saisir votre nom et prénom.";
+      if (!/^\S+@\S+\.\S+$/.test(email)) erreurs.email = "Format attendu : nom@domaine.fr";
       if (!(places >= 1 && places <= 10)) {
-        erreurs.places = "Entre 1 et 10 places.";
+        erreurs.quantites = places === 0
+          ? "Sélectionnez au moins une place."
+          : "La commande doit contenir entre 1 et 10 places au total.";
       }
 
-      var champs = ["nom", "email", "places"];
+      var champs = ["nom", "email"];
       for (var n = 0; n < champs.length; n++) {
         var champ = champs[n];
         var message = document.getElementById(champ + "-erreur");
@@ -197,20 +298,34 @@
         }
       }
 
+      if (erreurQuantites) {
+        erreurQuantites.textContent = erreurs.quantites || "";
+        erreurQuantites.hidden = !erreurs.quantites;
+      }
+      for (var v = 0; v < tarifs.length; v++) {
+        if (quantites[tarifs[v].id]) {
+          if (erreurs.quantites) quantites[tarifs[v].id].setAttribute("aria-invalid", "true");
+          else quantites[tarifs[v].id].removeAttribute("aria-invalid");
+        }
+      }
+
       var confirmation = document.getElementById("confirmation");
       var aucunPaiement = document.getElementById("aucun-paiement");
-
       if (Object.keys(erreurs).length > 0) {
         if (confirmation) confirmation.hidden = true;
         return;
       }
 
+      var detailsCommande = [];
+      for (var d = 0; d < tarifs.length; d++) {
+        var tarif = tarifs[d];
+        var nombre = Number(quantites[tarif.id].value) || 0;
+        if (nombre > 0) detailsCommande.push(nombre + " × " + tarif.nom);
+      }
       if (confirmation) {
-        confirmation.innerHTML =
-          '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true">' +
-          '<circle cx="12" cy="12" r="10"/><path d="m9 12 2 2 4-4"/></svg>' +
-          "<span>Merci " + nom + " ! Votre pré-réservation de " + places +
-          " place(s) est confirmée à l'écran.</span>";
+        confirmation.textContent = "Merci " + nom + " ! Votre pré-réservation de " +
+          detailsCommande.join(", ") + " (" + places + " place(s), " + tarifTotal +
+          " €) est confirmée à l'écran.";
         confirmation.hidden = false;
       }
       if (aucunPaiement) {
